@@ -1,0 +1,523 @@
+---
+title: "fig3"
+output: html_document
+date: "2024-01-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preprocessing - Sqrt Transform
+
+```{r normalize-matrix-sqrt}
+
+sqrtSCE <- spe_Schurch_2020
+
+assay(sqrtSCE, "intensities") <- apply(assay(spe_Schurch_2020, "intensities"), 2, sqrt)
+# sqrtSCE <- trim99(sqrtSCE, markers = rownames(sqrtSCE), imageID = "imageID")
+
+#Check if it worked
+head(t(assay(sqrtSCE)))[,1:6]
+head(t(assay(schurchSCE)))[,1:6]
+
+schurchSCE <- sqrtSCE
+```
+
+# Preprocessing - Distance
+
+```{r}
+schurchSCE <- getDistances(schurchSCE,
+                    maxDist = 200,
+                    nCores = 20)
+
+stateChangesSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "distances",
+  minCells = 100,
+  nCores = 40)
+
+schurchSCE <- calcContamination(schurchSCE)
+
+stateChangesCorrectedSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "distances",
+  nCores = 40,
+  contamination = TRUE)
+
+```
+# Preprocessing - Abundance
+
+```{r}
+schurchSCE <- getAbundances(schurchSCE, 
+                          r = 200,
+                          nCores = 20)
+
+stateChangesAbuSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "abundances",
+  minCells = 100,
+  nCores = 40)
+
+schurchSCE <- calcContamination(schurchSCE)
+
+stateChangesCorrectedAbuSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "abundances",
+  nCores = 40,
+  contamination = TRUE)
+```
+
+# Figure 3A-C (figuregen branch of Statial)
+
+```{r}
+plotStateChanges(schurchSCE,
+                 image = "reg065_A",
+                 from = "tumor_cells",
+                 to = "cd68_cd163_macrophages",
+                 marker = "cd45",
+                 type = "distances")
+
+plotStateChanges(schurchSCE,
+                 image = "reg065_A",
+                 from = "tumor_cells",
+                 to = "cd68_cd163_macrophages",
+                 marker = "cd45",
+                 type = "abundances")
+
+```
+
+# Figure 3D
+
+```{r}
+merged <- inner_join(stateChangesSchurch, stateChangesCorrectedSchurch, by = c("imageID", "primaryCellType", "otherCellType", "marker"), suffix = c("", "_cor"))
+
+merged$fdrDiff <- merged$fdr_cor/merged$fdr
+merged$signfdr <- ifelse(merged$tval > 0, -log10(merged$fdr), -(-log10(merged$fdr)))
+merged$signfdr_cor <- ifelse(merged$tval_cor > 0, -log10(merged$fdr_cor), -(-log10(merged$fdr_cor)))
+
+merged$signpval <- ifelse(merged$tval > 0, -log10(merged$pval), -(-log10(merged$pval)))
+merged$signpval_cor <- ifelse(merged$tval_cor > 0, -log10(merged$pval_cor), -(-log10(merged$pval_cor)))
+
+ggplot(data = merged, aes(x = signpval, y = signpval_cor)) +
+  geom_point_rast() +
+  xlim(-50, 50) +
+  ylim(-50, 50) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey")
+```
+
+# Figure 3E
+
+```{r}
+testCorrection <- function(cellTypeMarkers, # nolint
+                           stateChanges,
+                           stateChangesCorrected,
+                           stateChanges2,
+                           stateChanges2Corrected,
+                           # stateChanges3,
+                           # stateChanges3Corrected,
+                           # stateChanges4,
+                           # stateChanges4Corrected,
+                           xlim = 100,
+                           ylim = 10000,
+                           title = "what"
+                           ) {
+  cellTypeMarkers <- cellTypeMarkers
+
+  values = c("#ff8080", "red", "#8080ff", "blue")
+  names(values) <- c("dist", "dist_cor", "abu", "abu_cor")
+
+  stateChanges <- stateChanges[order(stateChanges$pval),]
+  stateChangesCorrected <- stateChangesCorrected[order(stateChangesCorrected$pval),]
+  # 
+  stateChanges2 <- stateChanges2[order(stateChanges2$pval),]
+  stateChanges2Corrected <- stateChanges2Corrected[order(stateChanges2Corrected$pval),]
+  # 
+  # stateChanges3 <- stateChanges3[order(stateChanges3$fdr),]
+  # stateChanges3Corrected <- stateChanges3Corrected[order(stateChanges3Corrected$fdr),]
+  # 
+  # stateChanges4 <- stateChanges4[order(stateChanges4$fdr),]
+  # stateChanges4Corrected <- stateChanges4Corrected[order(stateChanges4Corrected$fdr),]
+
+  # print(head(stateChanges))
+  # print(head(stateChangesCorrected))
+  # print(head(stateChanges2))
+  # print(head(stateChanges2Corrected))
+
+  # stateChanges <- stateChanges %>% filter(fdr < 0.05)
+  # stateChangesCorrected <- stateChangesCorrected %>% filter(fdr < 0.05)
+  # stateChanges2 <- stateChanges2 %>% filter(fdr < 0.05)
+  # stateChanges2Corrected <- stateChanges2Corrected %>% filter(fdr < 0.05)
+  # stateChanges3 <- stateChanges3 %>% filter(fdr < 0.05)
+  # stateChanges3Corrected <- stateChanges3Corrected %>% filter(fdr < 0.05)
+  # stateChanges4 <- stateChanges4 %>% filter(fdr < 0.05)
+  # stateChanges4Corrected <- stateChanges4Corrected %>% filter(fdr < 0.05)
+
+
+
+  df <- rbind(data.frame(TP =cumsum(!stateChanges$marker %in% cellTypeMarkers), 
+                        FP = cumsum(stateChanges$marker %in% cellTypeMarkers),
+                        fdr = case_when(stateChanges$fdr < 0.05 ~ "significant"), type = "dist"),
+              data.frame(TP =cumsum(!stateChangesCorrected$marker %in% cellTypeMarkers),
+                        FP = cumsum(stateChangesCorrected$marker %in% cellTypeMarkers),
+                        fdr = case_when(stateChangesCorrected$fdr < 0.05 ~ "significant"), type = "dist_cor"),
+              data.frame(TP =cumsum(!stateChanges2$marker %in% cellTypeMarkers),
+                        FP = cumsum(stateChanges2$marker %in% cellTypeMarkers),
+                        fdr = case_when(stateChanges2$fdr < 0.05 ~ "significant"), type = "abu"),
+              data.frame(TP =cumsum(!stateChanges2Corrected$marker %in% cellTypeMarkers),
+                        FP = cumsum(stateChanges2Corrected$marker %in% cellTypeMarkers),
+                        fdr = case_when(stateChanges2Corrected$fdr < 0.05 ~ "significant"), type = "abu_cor"))
+              # data.frame(TP =cumsum(!stateChanges3$marker %in% cellTypeMarkers), 
+              #           FP = cumsum(stateChanges3$marker %in% cellTypeMarkers),
+              #           fdr = case_when(stateChanges3$fdr < 0.05 ~ "significant"), type = "contamF1All"),
+              # data.frame(TP =cumsum(!stateChanges3Corrected$marker %in% cellTypeMarkers), 
+              #           FP = cumsum(stateChanges3Corrected$marker %in% cellTypeMarkers), 
+              #           fdr = case_when(stateChanges3Corrected$fdr < 0.05 ~ "significant"), type = "contamF1Def"),
+              # data.frame(TP =cumsum(!stateChanges4$marker %in% cellTypeMarkers), 
+              #           FP = cumsum(stateChanges4$marker %in% cellTypeMarkers), 
+              #           fdr = case_when(stateChanges4$fdr < 0.05 ~ "significant"), type = "contamMainF1"),
+              # data.frame(TP =cumsum(!stateChanges4Corrected$marker %in% cellTypeMarkers), 
+              #           FP = cumsum(stateChanges4Corrected$marker %in% cellTypeMarkers),
+              #           fdr = case_when(stateChanges4Corrected$fdr < 0.05 ~ "significant"), type = "noContam")) #nolint
+  # print(head(df[df$type == "Corrected",]))
+  # print(head(df[df$type == "None_BIDC",]))
+  # print(tail(df[df$type == "None_BIDC",]))
+  # print(head(df[df$type == "None_BIDC",]))
+
+  slope <- nrow(stateChanges %>% filter(!marker %in% cellTypeMarkers))/nrow(stateChanges %>% filter(marker %in% cellTypeMarkers))
+  slope <- slope %>% as.numeric
+  p1 <- ggplot(df, aes(x = FP, y = TP, colour = type)) + 
+        geom_line()+ labs(y = "Cell state marker", x = "Cell type marker") + 
+        scale_colour_manual(values = values) +
+        geom_abline(intercept = 0, slope = slope, linetype = "dashed", color = "#000000")
+
+
+  p2 <- ggplot(df, aes(x = FP, y = TP, colour = type)) + 
+        geom_line() +
+        xlim(0,xlim) +
+        ylim(0,ylim) +
+        labs(y = "Cell state marker", x = "Cell type marker") + 
+        scale_colour_manual(values = values) +
+        geom_abline(intercept = 0, slope = slope, linetype = "dashed", color = "#000000")
+
+  list(p1, p2)
+}
+```
+
+```{r}
+testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68", "cd45", "cd20", "cd11b"),
+               stateChanges = sqrtTvalCor,
+               stateChangesCorrected = stateChangesCorrectedSchurch,
+               stateChanges2 = stateChangesAbuSchurch,
+               stateChanges2Corrected = stateChangesCorrectedAbuSchurch,
+               # stateChanges3 = contamF1All,
+               # stateChanges3Corrected = contamF1Def,
+               # stateChanges4 = contamMainF1,
+               # stateChanges4Corrected = stateChangesAbu,
+               xlim = 100,
+               ylim = 800,
+               title = "BIDCell"
+              )[[2]] + theme(legend.position = "none")
+```
+
+```{r}
+sqrtTval <- getVolcano(stateChangesSchurch, var = "tval", imageThresh = 1, n_labels = 10)
+sqrtTvalCor <- getVolcano(stateChangesCorrectedSchurch, var = "tval", imageThresh = 1, n_labels = 10)
+
+sqrtTvalAbu <- getVolcano(stateChangesAbuSchurch, var = "tval", imageThresh = 1, n_labels = 10)
+sqrtTvalAbuCor <- getVolcano(stateChangesCorrectedAbuSchurch, var = "tval", imageThresh = 1, n_labels = 10)
+
+testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68", "cd45", "cd20", "cd11b"),
+               stateChanges = sqrtTval,
+               stateChangesCorrected = sqrtTvalCor,
+               stateChanges2 = sqrtTvalAbu,
+               stateChanges2Corrected = sqrtTvalAbuCor,
+               # stateChanges3 = contamF1All,
+               # stateChanges3Corrected = contamF1Def,
+               # stateChanges4 = contamMainF1,
+               # stateChanges4Corrected = stateChangesAbu,
+               xlim = 100,
+               ylim = 360,
+               title = "BIDCell"
+              )[[2]] + theme(legend.position = "none")
+
+
+```
+
+# Figure 3G
+## Preprocessing
+```{r}
+library(CellSPA)
+
+### BIDCell
+
+XeBreast <- readRDS("/dskh/nobackup/biostat/projects/singlecell/CellSPA_analysis/results/xenium_breast/spe_objects/spe_BIDCell_withMetrics.rds")
+
+colData(XeBreast) <- cbind(colData(XeBreast), spatialCoords(XeBreast))
+
+tmp <- colData(XeBreast) %>% as.data.frame
+tmp$scClassify <- gsub("[[:space:]+]", ".", tmp$scClassify)
+colData(XeBreast) <- tmp %>% DataFrame()
+
+assay(XeBreast, "logcounts") <- as.matrix(assay(XeBreast, "logcounts"))
+
+XeBreast <- getDistances(XeBreast,
+                        maxDist = 200,
+                        imageID = "sample_id",
+                        cellType = "scClassify",
+                        nCores = 20,
+                        spatialCoords = c("cell_centroid_x", "cell_centroid_y"))
+
+XeBreast <- calcContamination(XeBreast, assay = "logcounts", cellType = "scClassify")
+
+reducedDim(XeBreast, "contaminations")[["scClassify"]] <- NULL
+
+stateChangesBID <- calcStateChanges(
+  cells = XeBreast,
+  type = "distances",
+  assay = "logcounts",
+  imageID = "sample_id",
+  cellType = "scClassify",
+  minCells = 100,
+  nCores = 1
+)
+
+stateChangesBIDConta <- calcStateChanges(
+  cells = XeBreast,
+  type = "distances",
+  assay = "logcounts",
+  imageID = "sample_id",
+  cellType = "scClassify",
+  minCells = 100,
+  nCores = 1,
+  contamination = TRUE
+)
+
+### nuclei
+
+XeBreast10x <- readRDS("/dskh/nobackup/biostat/projects/singlecell/CellSPA_analysis/results/xenium_breast/spe_objects/spe_10x_nuclei_withMetrics.rds")
+
+colData(XeBreast10x) <- cbind(colData(XeBreast10x), spatialCoords(XeBreast10x))
+
+tmp <- colData(XeBreast10x) %>% as.data.frame
+tmp$scClassify <- gsub("[[:space:]+]", ".", tmp$scClassify)
+colData(XeBreast10x) <- tmp %>% DataFrame()
+
+assay(XeBreast10x, "logcounts") <- as.matrix(assay(XeBreast10x, "logcounts"))
+
+
+XeBreast10x <- getDistances(XeBreast10x,
+                        maxDist = 200,
+                        imageID = "sample_id",
+                        cellType = "scClassify",
+                        nCores = 20,
+                        spatialCoords = c("cell_centroid_x", "cell_centroid_y"))
+
+stateChanges10x <- calcStateChanges(
+  cells = XeBreast10x,
+  type = "distances",
+  # from = "B.Cells",
+  # to = c("CD4.T", "CD8.T"),
+  # marker = c("CD3D", "CD3E", "CD3G", "CD4", "CD8A", "CD8B"),
+  imageID = "sample_id",
+  cellType = "scClassify",
+  assay = "logcounts",
+  nCores = 1,
+  minCells = 100)
+
+XeBreast10x <- calcContamination(XeBreast10x, assay = "logcounts", cellType = "scClassify")
+
+reducedDim(XeBreast10x, "contaminations")[["scClassify"]] <- NULL
+
+stateChanges10xConta <- calcStateChanges(
+  cells = XeBreast10x,
+  type = "distances",
+  # from = "B.Cells",
+  # to = c("CD4.T", "CD8.T"),
+  # marker = c("CD3D", "CD3E", "CD3G", "CD4", "CD8A", "CD8B"),
+  imageID = "sample_id",
+  cellType = "scClassify",
+  assay = "logcounts",
+  nCores = 1,
+  minCells = 100,
+  contamination = TRUE)
+
+### Voronoi
+
+
+VoronoiXe <- readRDS("/dskh/nobackup/biostat/projects/singlecell/CellSPA_analysis/results/xenium_breast/spe_objects/spe_Voronoi_withMetrics.rds")
+
+colData(VoronoiXe) <- cbind(colData(VoronoiXe), spatialCoords(VoronoiXe))
+
+tmp <- colData(VoronoiXe) %>% as.data.frame
+tmp$scClassify <- gsub("[[:space:]+]", ".", tmp$scClassify)
+colData(VoronoiXe) <- tmp %>% DataFrame()
+
+assay(VoronoiXe, "logcounts") <- as.matrix(assay(VoronoiXe, "logcounts"))
+
+VoronoiXe <- getDistances(VoronoiXe,
+                        maxDist = 200,
+                        imageID = "sample_id",
+                        cellType = "scClassify",
+                        nCores = 20,
+                        spatialCoords = c("cell_centroid_x", "cell_centroid_y"))
+
+VoronoiXe <- calcContamination(VoronoiXe, assay = "logcounts", cellType = "scClassify")
+
+reducedDim(VoronoiXe, "contaminations")[["scClassify"]] <- NULL
+
+stateChangesVOR <- calcStateChanges(
+  cells = VoronoiXe,
+  type = "distances",
+  assay = "logcounts",
+  imageID = "sample_id",
+  cellType = "scClassify",
+  minCells = 100,
+  nCores = 1
+)
+
+stateChangesVORConta <- calcStateChanges(
+  cells = VoronoiXe,
+  type = "distances",
+  assay = "logcounts",
+  imageID = "sample_id",
+  cellType = "scClassify",
+  minCells = 100,
+  nCores = 1,
+  contamination = TRUE
+)
+```
+
+## Defining functions
+```{r}
+testCorrection <- function(cellTypeMarkers, # nolint
+                           stateChanges, # nolint
+                           stateChangesCorrected,
+                           stateChanges2,
+                           stateChanges2Corrected,
+                           stateChanges3,
+                           stateChanges3Corrected,
+                           xlim = 100,
+                           ylim = 10000,
+                           title = "what",
+                           fdr = TRUE
+                           ) {
+  cellTypeMarkers <- cellTypeMarkers
+
+  values = c("#ff8080", "#ff0000", "#8080ff", "#0000ff", "#00ff55", "#009933")
+  names(values) <- c("None_BIDC", "Corrected_BIDC", "None_VOR", "Corrected_VOR", "None_10x", "Corrected_10x")
+
+  stateChanges <- stateChanges[order(stateChanges$fdr),]
+  stateChangesCorrected <- stateChangesCorrected[order(stateChangesCorrected$fdr),]
+
+  stateChanges2 <- stateChanges2[order(stateChanges2$fdr),]
+  stateChanges2Corrected <- stateChanges2Corrected[order(stateChanges2Corrected$fdr),]
+  
+  stateChanges3 <- stateChanges3[order(stateChanges3$fdr),]
+  stateChanges3Corrected <- stateChanges3Corrected[order(stateChanges3Corrected$fdr),]
+
+  # print(head(stateChanges))
+  # print(head(stateChangesCorrected))
+  # print(head(stateChanges2))
+  # print(head(stateChanges2Corrected))
+  if (fdr == TRUE) {
+    stateChanges <- stateChanges %>% filter(fdr < 0.05)
+    stateChangesCorrected <- stateChangesCorrected %>% filter(fdr < 0.05)
+    stateChanges2 <- stateChanges2 %>% filter(fdr < 0.05)
+    stateChanges2Corrected <- stateChanges2Corrected %>% filter(fdr < 0.05)  
+    stateChanges3 <- stateChanges3 %>% filter(fdr < 0.05)
+    stateChanges3Corrected <- stateChanges3Corrected %>% filter(fdr < 0.05)  
+  }
+  
+
+
+
+  df <- rbind(data.frame(TP =cumsum(!stateChanges$marker %in% cellTypeMarkers), 
+                        FP = cumsum(stateChanges$marker %in% cellTypeMarkers),
+                        fdr = case_when(stateChanges$fdr < 0.05 ~ "significant"), type = "None_BIDC"),
+              data.frame(TP =cumsum(!stateChangesCorrected$marker %in% cellTypeMarkers), 
+                        FP = cumsum(stateChangesCorrected$marker %in% cellTypeMarkers), 
+                        fdr = case_when(stateChangesCorrected$fdr < 0.05 ~ "significant"), type = "Corrected_BIDC"),
+              data.frame(TP =cumsum(!stateChanges2$marker %in% cellTypeMarkers), 
+                        FP = cumsum(stateChanges2$marker %in% cellTypeMarkers), 
+                        fdr = case_when(stateChanges2$fdr < 0.05 ~ "significant"), type = "None_VOR"),
+              data.frame(TP =cumsum(!stateChanges2Corrected$marker %in% cellTypeMarkers), 
+                        FP = cumsum(stateChanges2Corrected$marker %in% cellTypeMarkers),
+                        fdr = case_when(stateChanges2Corrected$fdr < 0.05 ~ "significant"), type = "Corrected_VOR"),
+              data.frame(TP =cumsum(!stateChanges3$marker %in% cellTypeMarkers), 
+                        FP = cumsum(stateChanges3$marker %in% cellTypeMarkers),
+                        fdr = case_when(stateChanges3$fdr < 0.05 ~ "significant"), type = "None_10x"),
+              data.frame(TP =cumsum(!stateChanges3Corrected$marker %in% cellTypeMarkers), 
+                        FP = cumsum(stateChanges3Corrected$marker %in% cellTypeMarkers),
+                        fdr = case_when(stateChanges3Corrected$fdr < 0.05 ~ "significant"), type = "Corrected_10x"))
+  # print(head(df[df$type == "Corrected",]))
+  # print(head(df[df$type == "None_BIDC",]))
+  # print(tail(df[df$type == "None_BIDC",]))
+  # print(head(df[df$type == "None_BIDC",]))
+
+  # slope <- df[nrow(df),]["TP"] / df[nrow(df),]["FP"]
+  slope <- nrow(stateChanges %>% filter(!marker %in% cellTypeMarkers))/nrow(stateChanges %>% filter(marker %in% cellTypeMarkers))
+  slope <- slope %>% as.numeric
+  p1 <- ggplot(df, aes(x = FP, y = TP, colour = type)) + 
+        geom_line()+ labs(y = "Cell state marker", x = "Cell type marker") + 
+        scale_colour_manual(values = values) +
+        geom_abline(intercept = 0, slope = slope, linetype = "dashed", color = "#000000") +
+        ggtitle(title)
+
+
+  p2 <- ggplot(df, aes(x = FP, y = TP, colour = type)) + 
+        geom_line() +
+        xlim(0,xlim) +
+        ylim(0,ylim) +
+        labs(y = "Cell state marker", x = "Cell type marker") + 
+        scale_colour_manual(values = values) +
+        geom_abline(intercept = 0, slope = slope, linetype = "dashed", color = "#000000") +
+        ggtitle(title)
+  # grid.arrange(p1, p2, nrow=2)
+  
+  list(p1, p2)
+}
+```
+
+## Generating cell type specific marker list
+```{r}
+tmp2 <- colData(XeBreast) %>% as.data.frame %>% select(c("cell_id", "scClassify"))
+tmp <- t(assay(XeBreast, "logcounts")) %>% bind_cols(tmp2)
+allCellMarkers <- rownames(XeBreast)
+
+calculate_percentages <- function(df) {
+  df %>%
+    summarise_all(~ mean(. > 0, na.rm = TRUE) * 100)
+}
+
+df_list <- split(tmp, f = tmp$scClassify)
+percentage_results <- lapply(df_list, calculate_percentages)
+result_df <- do.call(rbind, percentage_results)
+
+normality <- list()
+for(marker in allCellMarkers) {  
+  shapiro <- shapiro.test(result_df[marker] %>% unlist())
+  normality[marker] <- shapiro$p.value
+}
+
+notNormal <- normality[normality[,1] < 0.05,, drop = FALSE]
+```
+
+## Figure 3G
+```{r}
+testCorrection(cellTypeMarkers = rownames(notNormal),
+               stateChanges = stateChangesBID,
+               stateChangesCorrected = stateChangesBIDConta,
+               stateChanges2 = stateChangesVOR,
+               stateChanges2Corrected = stateChangesVORConta,
+               stateChanges3 = stateChanges10x,
+               stateChanges3Corrected = stateChanges10xConta,
+               xlim = 1000,
+               ylim = 400,
+               title = "BIDCell",
+               fdr = FALSE
+              )
+```
+

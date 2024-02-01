@@ -1,0 +1,328 @@
+---
+title: "Figure4"
+output: html_document
+date: "2024-01-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preprocessing - Sqrt Transform
+
+```{r normalize-matrix-sqrt}
+
+sqrtSCE <- spe_Schurch_2020
+
+assay(sqrtSCE, "intensities") <- apply(assay(spe_Schurch_2020, "intensities"), 2, sqrt)
+# sqrtSCE <- trim99(sqrtSCE, markers = rownames(sqrtSCE), imageID = "imageID")
+
+#Check if it worked
+head(t(assay(sqrtSCE)))[,1:6]
+head(t(assay(schurchSCE)))[,1:6]
+
+schurchSCE <- sqrtSCE
+```
+
+# Preprocessing - Distance
+
+```{r}
+schurchSCE <- getDistances(schurchSCE,
+                    maxDist = 200,
+                    nCores = 20)
+
+stateChangesSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "distances",
+  minCells = 100,
+  nCores = 40)
+
+schurchSCE <- calcContamination(schurchSCE)
+
+stateChangesCorrectedSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "distances",
+  minCells = 100,
+  nCores = 40,
+  contamination = TRUE)
+
+```
+# Preprocessing - Abundance
+
+```{r}
+schurchSCE <- getAbundances(schurchSCE, 
+                          r = 200,
+                          nCores = 20)
+
+stateChangesAbuSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "abundances",
+  minCells = 100,
+  nCores = 40)
+
+schurchSCE <- calcContamination(schurchSCE)
+
+stateChangesCorrectedAbuSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "abundances",
+  minCells = 100,
+  nCores = 40,
+  contamination = TRUE)
+```
+
+# Survival Preprocessing
+
+```{r}
+survData = schurchSCE |>
+    na.omit() |>
+    colData() |> 
+    as.data.frame() |> 
+    select(imageID, os, os_censor, dfs, dfs_censor) |>
+    unique()
+
+survData$new_oscensor <- ifelse(survData$os < 48, 1, survData$os_censor)
+
+schurchSurv = Surv(survData$os, survData$os_censor)
+names(schurchSurv) = survData$imageID
+# stateByPatient <- stateChangesSchurch %>% na.omit()
+# nrow(stateByPatient)
+# stateByPatient <- stateByPatient %>% filter(imageID %in% survDataByPatient$imageID)
+# nrow(stateByPatient)
+# Creating survival vector
+
+
+schurchSurvDF = Surv(survData$dfs, survData$dfs_censor)
+names(schurchSurvDF) = survData$imageID
+
+
+survData2 <- schurchSCE %>%
+  colData() %>%
+  as.data.frame() %>%
+  select(imageID, patient, os, os_censor, dfs, dfs_censor) %>%
+  unique %>%
+  group_by(patient) %>%
+  dplyr::slice(1) %>%
+  ungroup()
+
+schurchSurv2 = Surv(survData2$os, survData2$os_censor)
+names(schurchSurv2) = survData2$imageID
+```
+
+
+# Figure 4A (figuregen branch of Statial)
+
+```{r}
+stateMat <- prepMatrix(na.omit(stateChangesSchurch), column = "tval")
+# stateMat <- prepMatrix(stateByPatient)
+
+# Ensuring rownames of stateMat match up with rownames of the survival vector
+stateMat <- stateMat[names(schurchSurv2), ]
+
+stateMat[is.na(stateMat)] <- 0
+# Remove some very small values
+stateMat <- stateMat[,colMeans(abs(stateMat)>0.0001)>.7]
+
+# tmp <- setdiff(names(schurchSurv), rownames(stateMat))
+
+# schurchSurv <- schurchSurv[!names(schurchSurv) %in% tmp]
+
+survivalResults <- colTest(stateMat, schurchSurv2, type = "survival")
+
+head(survivalResults)
+```
+
+# Figure 4A
+
+```{r}
+survivalResults$mean <- survivalResults$coef
+thresh <- 0.1
+pvalThresh <- 0.05
+
+survivalResults$diffexpressed <- "NO"
+survivalResults$diffexpressed[survivalResults$mean > thresh & survivalResults$pval < pvalThresh] <- "UP"
+survivalResults$diffexpressed[survivalResults$mean < -thresh & survivalResults$pval < pvalThresh] <- "DOWN"
+
+survivalResults$combined <- rownames(survivalResults)
+  
+tmp1 <- survivalResults %>%
+  filter(diffexpressed == "UP")
+tmp1 <- head(tmp1[order(tmp1$pval), "combined"], 4)
+
+tmp3 <- survivalResults %>%
+  filter(diffexpressed == "DOWN")
+tmp3 <- head(tmp3[order(tmp3$pval), "combined"], 4)
+
+tmp <- rbind(tmp1, tmp3)
+
+survivalResults$delabel <- ifelse(survivalResults$combined %in% tmp, survivalResults$combined, NA)
+
+survivalResults <- survivalResults[order(survivalResults$adjPval),]
+
+
+ggplot(survivalResults, aes(x = mean, y = -log10(pval), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.1, 0.1), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point() +
+  # xlim(-5, 5) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00")) +
+  geom_text_repel(max.overlaps = Inf, size = 3, min.segment.length = unit(0.1, "lines")) +
+  theme(legend.position = "none") +
+  labs(x = expression("Coefficient"), y = expression("-log"[10]*"(p-value)"))
+  # scale_x_continuous(breaks = seq(-0.5, 0.5, 0.2)) +
+  # coord_cartesian(xlim = c(-0.55, 0.55))
+
+
+```
+
+# Figure 4B
+
+```{r}
+# Selecting the most significant relationship
+survRelationship = stateMat[["tumor_cells__cd68_cd163_macrophages__na_k_at_pase"]]
+survRelationship = ifelse(survRelationship < median(survRelationship), "Higher expression in close cells", "Lower expression in close cells")
+    
+# Plotting Kaplan-Meier curve
+survfit2(schurchSurv2 ~ survRelationship) |>
+    ggsurvfit() +
+    add_pvalue(x = 500, y = 0.2) +
+    ggtitle("tumor_cells__cd68_cd163_macrophages__na_k_at_pase") +
+    add_censor_mark(shape = 4, size = 2)
+    # add_confidence_interval()
+
+# Selecting the most significant relationship
+survRelationship = stateMat[["cd8_t_cells__tumor_cells__cd5"]]
+survRelationship = ifelse(survRelationship < median(survRelationship), "Higher expression in close cells", "Lower expression in close cells")
+    
+# Plotting Kaplan-Meier curve
+survfit2(schurchSurv2 ~ survRelationship) |>
+    ggsurvfit() +
+    add_pvalue(x = 500, y = 0.2) +
+    ggtitle("cd8_t_cells__tumor_cells__cd5") +
+    # add_confidence_interval() + 
+    # xlim(0, 100)+
+    add_censor_mark(shape = 4, size = 2)
+    # xlim(0,60)
+
+```
+
+# Figure 4C
+
+```{r}
+### Distances
+
+# Preparing features for Statial
+stateMat <- prepMatrix(stateChangesSchurch)
+
+# Ensuring rownames of stateMat match up with rownames of the survival vector
+stateMat <- stateMat[names(schurchSurv), ]
+
+stateMat[is.na(stateMat)] <- 0
+# Remove some very small values
+stateMat <- stateMat[,colMeans(abs(stateMat)>0.0001)>.8]
+
+### Corrected Distances
+
+stateMatCor <- stateChangesCorrectedSchurch 
+
+# Preparing features for Statial
+stateMatCor <- prepMatrix(stateMatCor)
+
+# Ensuring rownames of stateMatCor match up with rownames of the survival vector
+stateMatCor <- stateMatCor[names(schurchSurv), ]
+
+stateMatCor[is.na(stateMatCor)] <- 0
+
+# Remove some very small values
+# Change average to variance
+stateMatCor <- stateMatCor[,colMeans(abs(stateMatCor)>0.0001)>.8]
+
+### Abundances
+
+stateMatAbu <- stateChangesCorrectedSchurch 
+
+# Preparing features for Statial
+stateMatAbu <- prepMatrix(stateChangesAbuSchurch)
+
+# Ensuring rownames of stateMatAbu match up with rownames of the survival vector
+stateMatAbu <- stateMatAbu[names(schurchSurv), ]
+
+stateMatAbu[is.na(stateMatAbu)] <- 0
+# Remove some very small values
+stateMatAbu <- stateMatAbu[,colMeans(abs(stateMatAbu)>0.0001)>.8]
+
+### Corrected Abundances
+
+stateMatAbuCor <- stateChangesCorrectedSchurch 
+
+# Preparing features for Statial
+stateMatAbuCor <- prepMatrix(stateChangesCorrectedAbuSchurch)
+
+# Ensuring rownames of stateMatAbuCor match up with rownames of the survival vector
+stateMatAbuCor <- stateMatAbuCor[names(schurchSurv), ]
+
+stateMatAbuCor[is.na(stateMatAbuCor)] <- 0
+# Remove some very small values
+stateMatAbuCor <- stateMatAbuCor[,colMeans(abs(stateMatAbuCor)>0.0001)>.8]
+```
+
+## Other Metrics
+
+```{r}
+schurchFiltSCE <- schurchSCE[,schurchSCE$imageID %in% survData$imageID]
+
+schurchFiltSCE <- lisaClust::lisaClust(schurchFiltSCE, k = 5)
+
+cellTypeRegionMeans <- getMarkerMeans(schurchFiltSCE,
+                              imageID = "imageID",
+                              cellType = "cellType",
+                              region = "region")
+
+cellTypeProp <- getProp(schurchFiltSCE, 
+                       feature = "cellType",
+                       imageID = "imageID")
+regionProp <- getProp(schurchFiltSCE, 
+                       feature = "region",
+                       imageID = "imageID")
+
+spicyData <- spicyR::getPairwise(schurchFiltSCE, 
+                                 BPPARAM = BiocParallel::MulticoreParam(workers = 40)) %>%
+  as.data.frame()
+```
+
+```{r slice1-tissuetype1}
+featureList <- list(
+                    aa_distances = stateMat,
+                    aa_distancesCorrected = stateMatCor,
+                    ab_abundances = stateMatAbu,
+                    ab_abundancesCorrected = stateMatAbuCor,
+                    ac_regionMarkerMeans = cellTypeRegionMeans,
+                    ad_cellTypeProp = cellTypeProp,
+                    ae_regionProp = regionProp,
+                    af_spicy = spicyData
+                    )
+
+# Ensure the rownames of the features match the order of the survival vector
+featureList <- lapply(featureList, function(x)x[names(schurchSurv),])
+
+
+schurchCV_OS = ClassifyR::crossValidate(
+  measurements = featureList,
+  outcome = schurchSurv,
+  classifier = "CoxPH",
+  selectionMethod  = "CoxPH",
+  multiViewMethod = "none",
+  nFolds = 10,
+  nFeatures = 50,
+  nRepeats = 20,
+  nCores = 40
+)
+
+ClassifyR::performancePlot(schurchCV_OS,
+  characteristicsList = list(x = "auto", fillColour = "Assay Name")
+  ) + 
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+  # scale_fill_tableau()
+
+```
+

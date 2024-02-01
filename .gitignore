@@ -1,0 +1,14 @@
+inst/doc
+*~
+.Rproj.user/
+.RData
+.Rhistory
+.Ruserdata
+.RData
+.DS_Store
+.Rproj.user
+SpatioMark_Figures.Rproj
+/doc/
+/Meta/
+vignettes/.build.timestamp
+spe_Schurch_2020.rds

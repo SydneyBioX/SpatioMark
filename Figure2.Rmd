@@ -1,0 +1,177 @@
+---
+title: "fig2"
+output: html_document
+date: "2024-01-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Preprocessing - Sqrt Transform
+
+```{r normalize-matrix-sqrt}
+sqrtSCE <- spe_Schurch_2020
+
+assay(sqrtSCE, "intensities") <- apply(assay(spe_Schurch_2020, "intensities"), 2, sqrt)
+
+#Check if it worked
+head(t(assay(sqrtSCE)))[,1:6]
+head(t(assay(schurchSCE)))[,1:6]
+
+schurchSCE <- sqrtSCE
+```
+
+# Preprocessing - Distance
+
+```{r}
+schurchSCE <- getDistances(schurchSCE,
+                    maxDist = 200,
+                    nCores = 20)
+
+stateChangesSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "distances",
+  minCells = 100,
+  nCores = 40)
+
+schurchSCE <- calcContamination(schurchSCE)
+
+stateChangesCorrectedSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "distances",
+  nCores = 40,
+  contamination = TRUE)
+
+```
+# Preprocessing - Abundance
+
+```{r}
+schurchSCE <- getAbundances(schurchSCE, 
+                          r = 200,
+                          nCores = 20)
+
+stateChangesAbuSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "abundances",
+  minCells = 100,
+  nCores = 40)
+
+schurchSCE <- calcContamination(schurchSCE)
+
+stateChangesCorrectedAbuSchurch <- calcStateChanges(
+  cells = schurchSCE,
+  type = "abundances",
+  nCores = 40,
+  contamination = TRUE)
+```
+
+# Figure 1A-C
+
+```{r}
+plotStateChanges(schurchSCE,
+                 image = "reg005_A",
+                 from = "cd68_cd163_macrophages",
+                 to = "tumor_cells",
+                 marker = "cd163",
+                 type = "distances")
+
+plotStateChanges(schurchSCE,
+                 image = "reg005_A",
+                 from = "cd68_cd163_macrophages",
+                 to = "tumor_cells",
+                 marker = "cd163",
+                 type = "abundances")
+
+
+```
+
+# Figure 1D
+
+```{r}
+stateChangesSchurch$signfdr <- ifelse(stateChangesSchurch$tval > 0, -log10(stateChangesSchurch$fdr), log10(stateChangesSchurch$fdr))
+
+stateChangesAbuSchurch$signfdr <- ifelse(stateChangesAbuSchurch$tval > 0, -log10(stateChangesAbuSchurch$fdr), log10(stateChangesAbuSchurch$fdr))
+
+stateChangesSchurch$signpval <- ifelse(stateChangesSchurch$tval > 0, -log10(stateChangesSchurch$pval), log10(stateChangesSchurch$pval))
+
+stateChangesAbuSchurch$signpval <- ifelse(stateChangesAbuSchurch$tval > 0, -log10(stateChangesAbuSchurch$pval), log10(stateChangesAbuSchurch$pval))
+
+contMerge <- inner_join(stateChangesSchurch, stateChangesAbuSchurch, by = c("imageID", "primaryCellType", "otherCellType", "marker"), suffix = c("_dist", "_abu"))
+
+tmp <- contMerge[sample(nrow(contMerge), 100000), ]
+
+ggplot(contMerge, aes(x = signpval_dist, y = signpval_abu)) +
+  ggrastr::geom_point_rast() +
+  geom_abline(slope = -1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  ylim(-100, 150)
+```
+
+# Figure 1E
+
+```{r}
+getVolcano <- function(stateChanges,
+                       var = "tval",
+                       thresh = 0.006,
+                       pvalThresh = 0.05,
+                       imageThresh = 10,
+                       n_labels = 2) {
+  
+  stateChanges <- na.omit(stateChanges)
+  
+  t_stats <- stateChanges %>%
+    group_by(primaryCellType, otherCellType, marker) %>%
+    filter(n() > 1) %>%
+    summarise(pval = t.test(.data[[var]])$p.value,
+              tval = t.test(.data[[var]])$statistic,
+              mean = mean(coef),
+              meantval = mean(.data[[var]]),
+              n_image = n()) %>%
+    filter(n_image > imageThresh)
+  
+  t_stats$fdr <- p.adjust(t_stats$pval)
+  
+  t_stats$diffexpressed <- "NO"
+  t_stats$diffexpressed[t_stats$mean > thresh & t_stats$fdr < pvalThresh] <- "UP"
+  t_stats$diffexpressed[t_stats$mean < -thresh & t_stats$fdr < pvalThresh] <- "DOWN"
+  
+  t_stats$combined <- paste(t_stats$primaryCellType, t_stats$otherCellType, t_stats$marker, 
+                            sep = "__")
+  
+  tmp1 <- t_stats %>%
+    filter(diffexpressed == "UP")
+  tmp1 <- head(tmp1[order(tmp1$fdr), "combined"], n_labels)
+  
+  tmp2 <- t_stats %>%
+    filter(diffexpressed == "DOWN")
+  tmp2 <- head(tmp2[order(tmp2$fdr), "combined"], n_labels)
+  
+  tmp <- rbind(tmp1, tmp2)
+  
+  t_stats$delabel <- ifelse(t_stats$combined %in% tmp$combined, t_stats$combined, NA)
+  
+  t_stats <- t_stats[order(t_stats$fdr),]
+  
+}
+```
+
+```{r}
+library(ggrepel)
+
+sqrtTvalCor <- getVolcano(stateChangesSchurch, var = "tval", imageThresh = 1, n_labels = 10)
+sqrtcoefCor <- getVolcano(stateChangesSchurch, var = "coef", imageThresh = 1, n_labels = 5)
+
+ggplot(sqrtTvalCor, aes(x = mean, y = -log10(fdr), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.006, 0.006), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point_rast() +
+  xlim(-0.1, 0.1) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00")) +
+  geom_text_repel(max.overlaps = Inf, size = 3, min.segment.length = unit(0.1, "lines")) +
+  theme(legend.position = "none") +
+  labs(x = expression("Coefficient"), y = expression("-log"[10]*"(adj.p-value)"))
+
+```
