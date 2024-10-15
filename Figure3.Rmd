@@ -8,6 +8,16 @@ date: "2024-01-22"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r, warning=FALSE, message=FALSE}
+library(ggsurvfit)
+library(ggrepel)
+library(spicyR)
+library(Statial)
+library(dplyr)
+library(ggplot2)
+library(SingleCellExperiment)
+```
+
 # Preprocessing - Sqrt Transform
 
 ```{r normalize-matrix-sqrt}
@@ -67,27 +77,84 @@ stateChangesCorrectedAbuSchurch <- calcStateChanges(
   nCores = 40,
   contamination = TRUE)
 ```
+# Filtering down cell types
+
+```{r, eval = FALSE}
+schurchSCE$cellType |> table() |> sort()
+
+schurchSCE <- schurchSCE[,schurchSCE$cellType != "dirt"]
+
+colData(schurchSCE) = schurchSCE |> 
+  colData() |>
+  as.data.frame() |>
+  mutate(cellType = case_when(
+    cellType == "cd163_macrophages" ~ "macrophages",
+    cellType == "cd4_t_cells_gata3" ~ "cd4_t_cells",
+    cellType == "cd68_macrophages_gzm_b" ~ "macrophages",
+    cellType == "cd3_t_cells" ~ "remove",
+    cellType == "cd11c_d_cs" ~ "dendritic",
+    cellType == "cd11b_cd68_macrophages" ~ "macrophages",
+    cellType == "tumor_cells_immune_cells" ~ "remove",
+    cellType == "cd68_macrophages" ~ "macrophages",
+    cellType == "immune_cells_vasculature" ~ "remove",
+    cellType == "undefined" ~ "remove",
+    cellType == "cd68_cd163_macrophages" ~ "macrophages",
+    cellType == "cd4_t_cells_cd45ro" ~ "cd4_t_cells",
+    TRUE ~ cellType
+  )) |>
+  DataFrame()
+
+schurchSCE <- schurchSCE[,schurchSCE$cellType != "remove"]
+```
 
 # Figure 3A-C (figuregen branch of Statial)
 
 ```{r}
 plotStateChanges(schurchSCE,
-                 image = "reg065_A",
-                 from = "tumor_cells",
-                 to = "cd68_cd163_macrophages",
-                 marker = "cd45",
-                 type = "distances")
+                 image = "reg005_A",
+                 from = "macrophages",
+                 to = "vasculature",
+                 marker = "cd34",
+                 type = "distances",
+                 purity_choice = "vasculature",
+                 transform = "sqrt"
+                 )$scatter
 
 plotStateChanges(schurchSCE,
-                 image = "reg065_A",
-                 from = "tumor_cells",
-                 to = "cd68_cd163_macrophages",
-                 marker = "cd45",
-                 type = "abundances")
+                 image = "reg005_A",
+                 from = "macrophages",
+                 to = "vasculature",
+                 marker = "cd34",
+                 type = "distances",
+                 purity_choice = "vasculature",
+                 transform = "sqrt"
+                 )$contam_image
+
+plotStateChanges(schurchSCE,
+                 image = "reg007_B",
+                 from = "macrophages",
+                 to = "smooth_muscle",
+                 marker = "a_sma",
+                 type = "distances",
+                 purity_choice = "smooth_muscle",
+                 transform = )
+## Dim = 8.54 * 5 Landscape
 
 ```
 
 # Figure 3D
+
+```{r}
+ggplot(merged, aes(x = tval, y = tval_cor)) +
+  ggrastr::geom_point_rast() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  theme_classic() +
+  xlim(-30, 30) +
+  ylim(-30, 30)
+```
+
 
 ```{r}
 merged <- inner_join(stateChangesSchurch, stateChangesCorrectedSchurch, by = c("imageID", "primaryCellType", "otherCellType", "marker"), suffix = c("", "_cor"))
@@ -99,13 +166,21 @@ merged$signfdr_cor <- ifelse(merged$tval_cor > 0, -log10(merged$fdr_cor), -(-log
 merged$signpval <- ifelse(merged$tval > 0, -log10(merged$pval), -(-log10(merged$pval)))
 merged$signpval_cor <- ifelse(merged$tval_cor > 0, -log10(merged$pval_cor), -(-log10(merged$pval_cor)))
 
+merged$highlight <- "NO"
+merged$highlight[merged$imageID == "reg065_A" & merged$marker == "cd45" & merged$primaryCellType == "tumor_cells" & merged$otherCellType == "cd68_cd163_macrophages"] <- "YES"
+
 ggplot(data = merged, aes(x = signpval, y = signpval_cor)) +
-  geom_point_rast() +
+  geom_point() +
+  # geom_hex(bins = 50, alpha = 0.7) +
+  # scale_fill_viridis_c(trans = "log", limit = c(1, NA)) +
   xlim(-50, 50) +
   ylim(-50, 50) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
   geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey")
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = c(log10(0.05), -log10(0.05)), linetype = "dashed", color = "red") +
+  geom_hline(yintercept = c(log10(0.05), -log10(0.05)), linetype = "dashed", color = "red") +
+  theme_classic()
 ```
 
 # Figure 3E
@@ -122,12 +197,38 @@ testCorrection <- function(cellTypeMarkers, # nolint
                            # stateChanges4Corrected,
                            xlim = 100,
                            ylim = 10000,
-                           title = "what"
+                           title = "ROC",
+                           unbalanced = FALSE
                            ) {
   cellTypeMarkers <- cellTypeMarkers
 
   values = c("#ff8080", "red", "#8080ff", "blue")
   names(values) <- c("dist", "dist_cor", "abu", "abu_cor")
+  
+  stateChanges <- stateChanges[!is.na(stateChanges$pval),]
+  stateChangesCorrected <- stateChangesCorrected[!is.na(stateChangesCorrected$pval),]
+  stateChanges2 <- stateChanges2[!is.na(stateChanges2$pval),]
+  stateChanges2Corrected <- stateChanges2Corrected[!is.na(stateChanges2Corrected$pval),]
+  
+  if(unbalanced == TRUE) {
+    
+    tmp <- unite(stateChanges, "new", imageID:marker)
+    stateChanges$united <- tmp$new
+
+    tmp <- unite(stateChangesCorrected, "new", imageID:marker)
+    stateChangesCorrected$united <- tmp$new
+    
+    tmp <- unite(stateChanges2, "new", imageID:marker)
+    stateChanges2$united <- tmp$new
+    
+    tmp <- unite(stateChanges2Corrected, "new", imageID:marker)
+    stateChanges2Corrected$united <- tmp$new
+    
+    stateChanges <- stateChanges[stateChanges$united %in% stateChanges2$united,]
+    stateChangesCorrected <- stateChangesCorrected[stateChangesCorrected$united %in% stateChanges2Corrected$united,]
+    
+  }
+  
 
   stateChanges <- stateChanges[order(stateChanges$pval),]
   stateChangesCorrected <- stateChangesCorrected[order(stateChangesCorrected$pval),]
@@ -185,13 +286,28 @@ testCorrection <- function(cellTypeMarkers, # nolint
   # print(head(df[df$type == "None_BIDC",]))
   # print(tail(df[df$type == "None_BIDC",]))
   # print(head(df[df$type == "None_BIDC",]))
+  
+  
+    df2 <- rbind(data.frame(TP =!stateChanges$marker %in% cellTypeMarkers, 
+                        FP = stateChanges$marker %in% cellTypeMarkers,
+                        fdr = case_when(stateChanges$fdr < 0.05 ~ "significant"), type = "dist"),
+              data.frame(TP =!stateChangesCorrected$marker %in% cellTypeMarkers,
+                        FP = stateChangesCorrected$marker %in% cellTypeMarkers,
+                        fdr = case_when(stateChangesCorrected$fdr < 0.05 ~ "significant"), type = "dist_cor"),
+              data.frame(TP =!stateChanges2$marker %in% cellTypeMarkers,
+                        FP = stateChanges2$marker %in% cellTypeMarkers,
+                        fdr = case_when(stateChanges2$fdr < 0.05 ~ "significant"), type = "abu"),
+              data.frame(TP =!stateChanges2Corrected$marker %in% cellTypeMarkers,
+                        FP = stateChanges2Corrected$marker %in% cellTypeMarkers,
+                        fdr = case_when(stateChanges2Corrected$fdr < 0.05 ~ "significant"), type = "abu_cor"))
 
   slope <- nrow(stateChanges %>% filter(!marker %in% cellTypeMarkers))/nrow(stateChanges %>% filter(marker %in% cellTypeMarkers))
   slope <- slope %>% as.numeric
   p1 <- ggplot(df, aes(x = FP, y = TP, colour = type)) + 
         geom_line()+ labs(y = "Cell state marker", x = "Cell type marker") + 
         scale_colour_manual(values = values) +
-        geom_abline(intercept = 0, slope = slope, linetype = "dashed", color = "#000000")
+        geom_abline(intercept = 0, slope = slope, linetype = "dashed", color = "#000000") +
+        theme(legend.position = "none")
 
 
   p2 <- ggplot(df, aes(x = FP, y = TP, colour = type)) + 
@@ -200,15 +316,16 @@ testCorrection <- function(cellTypeMarkers, # nolint
         ylim(0,ylim) +
         labs(y = "Cell state marker", x = "Cell type marker") + 
         scale_colour_manual(values = values) +
-        geom_abline(intercept = 0, slope = slope, linetype = "dashed", color = "#000000")
+        geom_abline(intercept = 0, slope = slope, linetype = "dashed", color = "#000000") +
+        theme(legend.position = "none")
 
-  list(p1, p2)
+  list(df, df2, p1, p2)
 }
 ```
 
 ```{r}
 testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68", "cd45", "cd20", "cd11b"),
-               stateChanges = sqrtTvalCor,
+               stateChanges = stateChangesSchurch,
                stateChangesCorrected = stateChangesCorrectedSchurch,
                stateChanges2 = stateChangesAbuSchurch,
                stateChanges2Corrected = stateChangesCorrectedAbuSchurch,
@@ -217,36 +334,338 @@ testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68",
                # stateChanges4 = contamMainF1,
                # stateChanges4Corrected = stateChangesAbu,
                xlim = 100,
-               ylim = 800,
-               title = "BIDCell"
-              )[[2]] + theme(legend.position = "none")
-```
+               ylim = 850,
+               title = "",
+               unbalanced = TRUE
+              )[[4]]
 
-```{r}
-sqrtTval <- getVolcano(stateChangesSchurch, var = "tval", imageThresh = 1, n_labels = 10)
-sqrtTvalCor <- getVolcano(stateChangesCorrectedSchurch, var = "tval", imageThresh = 1, n_labels = 10)
-
-sqrtTvalAbu <- getVolcano(stateChangesAbuSchurch, var = "tval", imageThresh = 1, n_labels = 10)
-sqrtTvalAbuCor <- getVolcano(stateChangesCorrectedAbuSchurch, var = "tval", imageThresh = 1, n_labels = 10)
-
-testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68", "cd45", "cd20", "cd11b"),
-               stateChanges = sqrtTval,
-               stateChangesCorrected = sqrtTvalCor,
-               stateChanges2 = sqrtTvalAbu,
-               stateChanges2Corrected = sqrtTvalAbuCor,
+auc_df <- testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68", "cd45", "cd20", "cd11b"),
+               stateChanges = stateChangesSchurch,
+               stateChangesCorrected = stateChangesCorrectedSchurch,
+               stateChanges2 = stateChangesAbuSchurch,
+               stateChanges2Corrected = stateChangesCorrectedAbuSchurch,
                # stateChanges3 = contamF1All,
                # stateChanges3Corrected = contamF1Def,
                # stateChanges4 = contamMainF1,
                # stateChanges4Corrected = stateChangesAbu,
                xlim = 100,
-               ylim = 360,
-               title = "BIDCell"
-              )[[2]] + theme(legend.position = "none")
+               ylim = 850,
+               title = "",
+               unbalanced = TRUE
+              )[[1]]
 
+auc_df2 <- testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68", "cd45", "cd20", "cd11b"),
+               stateChanges = stateChangesSchurch,
+               stateChangesCorrected = stateChangesCorrectedSchurch,
+               stateChanges2 = stateChangesAbuSchurch,
+               stateChanges2Corrected = stateChangesCorrectedAbuSchurch,
+               # stateChanges3 = contamF1All,
+               # stateChanges3Corrected = contamF1Def,
+               # stateChanges4 = contamMainF1,
+               # stateChanges4Corrected = stateChangesAbu,
+               xlim = 100,
+               ylim = 850,
+               title = "",
+               unbalanced = TRUE
+              )[[2]]
+
+auc_df |>
+  group_by(type) |>
+  summarise(total_positives = max(TP),
+            total_negatives = max(FP))
+
+auc_df$TPR <- auc_df$TP / 658067
+auc_df$FPR <- auc_df$FP / 122076
+
+plot(auc_df$FPR, auc_df$TPR, type = "l", col = "blue", xlab = "False Positive Rate", ylab = "True Positive Rate", main = "ROC Curve")
+
+# Create a ROC object
+roc_curve_dist <- roc(response = auc_df$TPR[auc_df$type == "dist"],
+                      predictor = auc_df$FPR[auc_df$type == "dist"], 
+                      plot = TRUE)
+
+roc_curve_distcor <- roc(response = auc_df$TPR[auc_df$type == "dist_cor"], 
+                         predictor = auc_df$FPR[auc_df$type == "dist_cor"],
+                         plot = TRUE)
+
+roc_curve_abu <- roc(response = auc_df$TPR[auc_df$type == "abu"], 
+                     predictor = auc_df$FPR[auc_df$type == "abu"],
+                     plot = TRUE)
+
+roc_curve_abucor <- roc(response = auc_df$TPR[auc_df$type == "abu_cor"], 
+                        predictor = auc_df$FPR[auc_df$type == "abu_cor"],
+                        plot = TRUE)
+
+# Calculate the partial AUC between FPR of 0 and 0.2 (adjust as necessary)
+partial_auc <- auc(roc_curve_dist, partial.auc = c(0, 0.0008191618), partial.auc.focus = "specificity"
+                   # , partial.auc.correct = TRUE
+                   )
+print(partial_auc)
+
+partial_auc <- auc(roc_curve_distcor, partial.auc = c(0, 0.0008191618), partial.auc.focus = "specificity"
+                   # , partial.auc.correct = TRUE
+                   )
+print(partial_auc)
+
+partial_auc <- auc(roc_curve_abu, partial.auc = c(0, 0.0008191618), partial.auc.focus = "specificity"
+                   # , partial.auc.correct = TRUE
+                   )
+print(partial_auc)
+
+partial_auc <- auc(roc_curve_abucor, partial.auc = c(0, 0.0008191618), partial.auc.focus = "specificity"
+                   # , partial.auc.correct = TRUE
+                   )
+print(partial_auc)
+
+roc_curve <- roc(response = auc_df$TPR[auc_df$type == "dist_cor"], predictor = auc_df$FPR[auc_df$type == "dist_cor"])
+
+# Calculate the partial AUC between FPR of 0 and 0.2 (adjust as necessary)
+partial_auc <- auc(roc_curve, partial.auc = c(0, 0.001), partial.auc.focus = "sensitivity", partial.auc.correct = TRUE)
+print(partial_auc)
+# testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68", "cd45", "cd20", "cd11b"),
+#                stateChanges = superListDistance[[1]],
+#                stateChangesCorrected = superListDistance[[2]],
+#                stateChanges2 = superListDistance[[7]],
+#                stateChanges2Corrected = stateChangesSchurch,
+#                # stateChanges3 = contamF1All,
+#                # stateChanges3Corrected = contamF1Def,
+#                # stateChanges4 = contamMainF1,
+#                # stateChanges4Corrected = stateChangesAbu,
+#                xlim = 100,
+#                ylim = 850,
+#                title = "",
+#                unbalanced = TRUE
+#               )[[2]]
+
+plot.roc(aSAH$outcome, aSAH$s100b)
+```
+# ROCR
+
+```{r}
+library(ROCR)
+
+auc_df <- auc_df |>
+  group_by(type) |>
+  tibble::rowid_to_column("ID")
+
+# Since you have ranks, you can use them as scores
+pred <- prediction(-auc_df$ID[auc_df$type == "dist"], auc_df2$TP[auc_df2$type == "dist"])
+
+perf <- performance(pred, "tpr", "fpr")
+
+plot(perf, col = "blue", lwd = 2, main = "ROC Curve from Rankings", xlim = c(0, 0.001), ylim = c(0, 0.001))
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+auc_perf <- performance(pred, measure = "auc", fpr.stop =0.001)
+auc_value <- auc_perf@y.values[[1]]
+legend("bottomright", legend = paste("AUC =", round(auc_value, 3)))
+
+corrected_auc <- 0.5 * (1 + (auc_value - 0.5*0.001**2) / (0.001 - 0.5*0.001**2))
+```
+
+
+```{r}
+# pAUC_thresh <- 0.003
+
+for(pAUC_thresh in 1:2*0.001) {
+  pred <- prediction(-auc_df$ID[auc_df$type == "dist"], auc_df2$TP[auc_df2$type == "dist"])
+
+  perf <- performance(pred, "tpr", "fpr")
+  
+  plot(perf, col = "blue", lwd = 2, main = "ROC Curve from Rankings", xlim = c(0, pAUC_thresh), ylim = c(0, 2*pAUC_thresh))
+  abline(a = 0, b = 1, lty = 2, col = "gray")
+  
+  auc_perf <- performance(pred, measure = "auc", fpr.stop =pAUC_thresh)
+  auc_value <- auc_perf@y.values[[1]]
+  legend("bottomright", legend = paste("AUC =", round(auc_value, 3)))
+  
+  corrected_auc <- 0.5 * (1 + (auc_value - 0.5*pAUC_thresh**2) / (pAUC_thresh - 0.5*pAUC_thresh**2))
+  print(corrected_auc)
+}
+
+for(pAUC_thresh in 1:2*0.001) {
+  pred <- prediction(-auc_df$ID[auc_df$type == "dist_cor"], auc_df2$TP[auc_df2$type == "dist_cor"])
+
+  perf <- performance(pred, "tpr", "fpr")
+  
+  plot(perf, col = "blue", lwd = 2, main = "ROC Curve from Rankings", xlim = c(0, pAUC_thresh), ylim = c(0, 2*pAUC_thresh))
+  abline(a = 0, b = 1, lty = 2, col = "gray")
+  
+  auc_perf <- performance(pred, measure = "auc", fpr.stop =pAUC_thresh)
+  auc_value <- auc_perf@y.values[[1]]
+  legend("bottomright", legend = paste("AUC =", round(auc_value, 3)))
+  
+  corrected_auc <- 0.5 * (1 + (auc_value - 0.5*pAUC_thresh**2) / (pAUC_thresh - 0.5*pAUC_thresh**2))
+  print(corrected_auc)
+}
 
 ```
 
-# Figure 3G
+The reason why the pAUC is so low is because the maximum pAUC is calculated by extending upwards. For example, if you set the `ylim = c(0,1)` and kept xlim as is, then your blue line pretty much blends in with the diagonal line, which is why having a low pAUC here close to 0.5 makes sense. 
+
+```{r}
+pred <- prediction(-auc_df$ID[auc_df$type == "dist"], auc_df2$TP[auc_df2$type == "dist"])
+perf <- performance(pred, "tpr", "fpr")
+
+# Extract TPR and FPR values
+tpr_values <- perf@y.values[[1]]
+fpr_values <- perf@x.values[[1]]
+
+# Define the FPR range
+fpr_min <- 0.0
+fpr_max <- 0.001
+
+# Select indices within the desired FPR range
+indices <- which(fpr_values >= fpr_min & fpr_values <= fpr_max)
+
+# Extract corresponding TPR and FPR
+tpr_partial <- tpr_values[indices]
+fpr_partial <- fpr_values[indices]
+
+
+# Use the trapezoidal rule to approximate the area
+partial_auc <- pracma::trapz(fpr_partial, tpr_partial)
+
+# Compute the maximum possible area in the partial ROC space
+max_partial_auc <- (fpr_max - fpr_min) * 1  # Since TPR can go up to 1
+
+# Normalize the partial AUC
+normalized_partial_auc <- partial_auc / max_partial_auc
+
+print(paste("Partial AUC (FPR", fpr_min, "to", fpr_max, ") =", round(normalized_partial_auc, 5)))
+
+```
+
+
+```{r}
+# Example: If lower ranks mean higher confidence
+
+auc_df <- auc_df |>
+  group_by(type) |>
+  mutate(adjusted_score = max(ID) - ID + 1) |>
+  mutate(scaled_score = adjusted_score/max(adjusted_score))
+
+# roc_obj <- roc(response = c(rep(TRUE, nrow(auc_df2[auc_df2$type == "dist" & auc_df2$TP == TRUE,])), 
+#                             rep(FALSE, nrow(auc_df2[auc_df2$type == "dist" & auc_df2$TP == FALSE,]))), 
+#                predictor = auc_df$scaled_score[auc_df$type == "dist"]) |> plot()
+
+roc1 <- roc(response = auc_df2$TP[auc_df2$type == "dist"], 
+               predictor = auc_df$scaled_score[auc_df$type == "dist"],
+               auc = TRUE,
+               partial.auc = c(1, 0.9995),
+               partial.auc.focus = "specificity"
+               # partial.auc.correct = TRUE
+               ) 
+roc1
+roc1 |>
+    plot(xlim = c(1, 0.999), ylim = c(0, 0.001))
+
+roc2 <- roc(response = auc_df2$TP[auc_df2$type == "dist_cor"], 
+               predictor = auc_df$scaled_score[auc_df$type == "dist_cor"],
+               auc = TRUE,
+               partial.auc = c(1, 0.9995),
+               partial.auc.focus = "specificity"
+               # partial.auc.correct = TRUE
+               # partial.auc.correct = TRUE
+               ) 
+roc2
+roc2 |>
+    plot(xlim = c(1, 0.999), ylim = c(0, 0.001))
+
+roc.test(roc1, roc2, partial.auc=c(1, 0.999))
+
+# roc_obj <- roc(response = auc_df2$TP[auc_df2$type == "dist_cor"], predictor = auc_df$adjusted_score[auc_df$type == "dist_cor"]) |>
+#   plot(xlim = c(1, 0.999), ylim = c(0, 0.001))
+# 
+# plot(roc_obj, xlim = c(0, 1), ylim = c(0, 1), col = "blue", lwd = 2,
+#      main = "Partial ROC Curve (FPR 0 to 0.2)")
+# abline(a = 0, b = 1, lty = 2, col = "gray")
+# 
+# roc(aSAH$outcome, aSAH$age) |> plot()
+
+roc1$auc
+roc2$auc
+```
+
+```{r}
+# Function to calculate pAUC relative to random using trapezoidal rule
+pauc_relative_to_random <- function(fpr, tpr, fpr_min, fpr_max) {
+  # Filter points within the specified FPR range
+  within_range <- which(fpr >= fpr_min & fpr <= fpr_max)
+  # Get the FPR and TPR values within the range
+  fpr_subset <- fpr[within_range]
+  tpr_subset <- tpr[within_range]
+  # If necessary, add boundary points
+  if (min(fpr_subset) > fpr_min) {
+    fpr_subset <- c(fpr_min, fpr_subset)
+    tpr_subset <- c(approx(fpr, tpr, xout = fpr_min)$y, tpr_subset)
+  }
+  if (max(fpr_subset) < fpr_max) {
+    fpr_subset <- c(fpr_subset, fpr_max)
+    tpr_subset <- c(tpr_subset, approx(fpr, tpr, xout = fpr_max)$y)
+  }
+  # Calculate the raw partial AUC using the trapezoidal rule
+  raw_pauc <- 0
+  for (i in 1:(length(fpr_subset) - 1)) {
+    # Trapezoid area: 0.5 * (x2 - x1) * (y1 + y2)
+    raw_pauc <- raw_pauc +
+      0.5 * (fpr_subset[i+1] - fpr_subset[i]) * (tpr_subset[i] + tpr_subset[i+1])
+  }
+  # Calculate the maximum possible pAUC in the range [fpr_min, fpr_max]
+  max_pauc <- fpr_max - fpr_min
+  # Calculate the random pAUC (area under the diagonal line y = x)
+  random_pauc <- 0.5 * (fpr_max - fpr_min)
+  # Calculate pAUC relative to random
+  if (max_pauc == random_pauc) {
+    relative_pauc <- 0  # To avoid division by zero, set relative pAUC to 0
+  } else {
+    relative_pauc <- (raw_pauc - random_pauc) / (max_pauc - random_pauc)
+  }
+  return(relative_pauc)
+}
+# Example usage:
+# Define some example FPR and TPR values (ROC curve points)
+# Specify the partial FPR range
+fpr_min <- 0
+fpr_max <- 0.001
+# Calculate the pAUC relative to random
+relative_pauc_value <- pauc_relative_to_random(auc_df$FPR[auc_df$type == "dist"], auc_df$TPR[auc_df$type == "dist"], fpr_min, fpr_max)
+cat("Partial AUC relative to random (between 0 and 1):", relative_pauc_value, "\n")
+```
+
+
+
+
+
+```{r}
+pROC = function (truth, stat = NULL,p)
+{
+ if (!length(truth))
+ return(NULL)
+ truth <- as.numeric(as.logical(truth))
+ if (!is.null(stat)) {
+ if (length(stat) != length(truth))
+ stop("lengths differ")
+ truth[is.na(stat)] <- NA
+ truth <- truth[order(stat, decreasing = TRUE)]
+ }
+ isna <- is.na(truth)
+ if (any(isna))
+ truth <- truth[!isna]
+ use = cumsum(truth==0)<p
+ sens <- cumsum(truth)/sum(truth)
+ truth1 = truth[use]
+ mean(sens[which(truth1 == 0)])
+}
+
+pROC(auc_df2$FP[auc_df2$type == "dist"], p = 100)
+
+TPR = function(x)pROC((names(sort(x[names(x)%in%c(TRUEDE,NOTDE)]))%in%TRUEDE)*1,p = 10)
+
+```
+
+
+# Figure 3F
 ## Preprocessing
 ```{r}
 library(CellSPA)
@@ -519,5 +938,48 @@ testCorrection(cellTypeMarkers = rownames(notNormal),
                title = "BIDCell",
                fdr = FALSE
               )
+
+
+testCorrection(cellTypeMarkers = c("cd3", "cd4", "cd8", "cd56", "cd11c", "cd68", "cd45", "cd20", "cd11b"),
+               stateChanges = superListDistance[[1]],
+               stateChangesCorrected = superListDistance[[2]],
+               stateChanges2 = superListDistance[[3]],
+               stateChanges2Corrected = superListDistance[[4]],
+               stateChanges3 = superListDistance[[5]],
+               stateChanges3Corrected = superListDistance[[7]],
+               xlim = 250,
+               ylim = 1000,
+               title = "BIDCell",
+               fdr = FALSE
+              )
 ```
+
+
+
+
+```{r}
+plotStateChanges(schurchSCE,
+                 image = "reg002_B", 
+                 from = "granulocytes",
+                 to = "vasculature",
+                 marker = "cd4_pd_1")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

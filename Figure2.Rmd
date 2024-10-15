@@ -8,19 +8,61 @@ date: "2024-01-22"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r}
+library(ggplot2)
+library(Statial)
+library(ggrepel)
+library(dplyr)
+library(tidyr)
+library(ggrastr)
+library(SingleCellExperiment)
+library(spicyR)
+```
+
 
 # Preprocessing - Sqrt Transform
 
 ```{r normalize-matrix-sqrt}
+spe_Schurch_2020 <- readRDS("spe_Schurch_2020.rds")
 sqrtSCE <- spe_Schurch_2020
 
 assay(sqrtSCE, "intensities") <- apply(assay(spe_Schurch_2020, "intensities"), 2, sqrt)
 
 #Check if it worked
 head(t(assay(sqrtSCE)))[,1:6]
-head(t(assay(schurchSCE)))[,1:6]
+# head(t(assay(schurchSCE)))[,1:6]
 
 schurchSCE <- sqrtSCE
+```
+
+# Filtering down cell types
+
+```{r, eval = FALSE}
+schurchSCE$cellType |> table() |> sort()
+
+schurchSCE <- schurchSCE[,schurchSCE$cellType != "dirt"]
+
+colData(schurchSCE) = schurchSCE |> 
+  colData() |>
+  as.data.frame() |>
+  mutate(cellType = case_when(
+    cellType == "cd163_macrophages" ~ "macrophages",
+    cellType == "cd4_t_cells_gata3" ~ "cd4_t_cells",
+    cellType == "cd68_macrophages_gzm_b" ~ "macrophages",
+    cellType == "cd3_t_cells" ~ "remove",
+    cellType == "cd11c_d_cs" ~ "dendritic",
+    cellType == "cd11b_cd68_macrophages" ~ "macrophages",
+    cellType == "tumor_cells_immune_cells" ~ "remove",
+    cellType == "cd68_macrophages" ~ "macrophages",
+    cellType == "immune_cells_vasculature" ~ "remove",
+    cellType == "undefined" ~ "remove",
+    cellType == "cd68_cd163_macrophages" ~ "macrophages",
+    cellType == "cd4_t_cells_cd45ro" ~ "cd4_t_cells",
+    TRUE ~ cellType
+  )) |>
+  DataFrame()
+
+schurchSCE <- schurchSCE[,schurchSCE$cellType != "remove"]
 ```
 
 # Preprocessing - Distance
@@ -35,14 +77,15 @@ stateChangesSchurch <- calcStateChanges(
   type = "distances",
   minCells = 100,
   nCores = 40)
-
-schurchSCE <- calcContamination(schurchSCE)
-
-stateChangesCorrectedSchurch <- calcStateChanges(
-  cells = schurchSCE,
-  type = "distances",
-  nCores = 40,
-  contamination = TRUE)
+set.seed(51773)
+# schurchSCE <- calcContamination(schurchSCE)
+# 
+# stateChangesCorrectedSchurch <- calcStateChanges(
+#   cells = schurchSCE,
+#   type = "distances",
+#   nCores = 40,
+#   contamination = TRUE,
+#   minCells = 100)
 
 ```
 # Preprocessing - Abundance
@@ -57,14 +100,15 @@ stateChangesAbuSchurch <- calcStateChanges(
   type = "abundances",
   minCells = 100,
   nCores = 40)
-
-schurchSCE <- calcContamination(schurchSCE)
-
-stateChangesCorrectedAbuSchurch <- calcStateChanges(
-  cells = schurchSCE,
-  type = "abundances",
-  nCores = 40,
-  contamination = TRUE)
+set.seed(51773)
+# schurchSCE <- calcContamination(schurchSCE)
+# # 
+# stateChangesCorrectedAbuSchurch <- calcStateChanges(
+#   cells = schurchSCE,
+#   type = "abundances",
+#   nCores = 40,
+#   contamination = TRUE,
+#   minCells = 100)
 ```
 
 # Figure 1A-C
@@ -72,14 +116,14 @@ stateChangesCorrectedAbuSchurch <- calcStateChanges(
 ```{r}
 plotStateChanges(schurchSCE,
                  image = "reg005_A",
-                 from = "cd68_cd163_macrophages",
+                 from = "macrophages",
                  to = "tumor_cells",
                  marker = "cd163",
                  type = "distances")
 
 plotStateChanges(schurchSCE,
                  image = "reg005_A",
-                 from = "cd68_cd163_macrophages",
+                 from = "macrophages",
                  to = "tumor_cells",
                  marker = "cd163",
                  type = "abundances")
@@ -108,7 +152,21 @@ ggplot(contMerge, aes(x = signpval_dist, y = signpval_abu)) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
   geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
   ylim(-100, 150)
+
 ```
+
+
+```{r}
+ggplot(contMerge, aes(x = tval_dist, y = tval_abu)) +
+  ggrastr::geom_point_rast() +
+  geom_abline(slope = -1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  theme_classic() +
+  xlim(-40, 40) +
+  ylim(-30, 40)
+```
+
 
 # Figure 1E
 
@@ -118,9 +176,29 @@ getVolcano <- function(stateChanges,
                        thresh = 0.006,
                        pvalThresh = 0.05,
                        imageThresh = 10,
-                       n_labels = 2) {
+                       n_labels = 2,
+                       subject = NULL,
+                       weighted = FALSE) {
   
   stateChanges <- na.omit(stateChanges)
+  
+  if(!is.null(subject)) {
+    stateChanges <- stateChanges %>%
+      left_join(patientMapping, by = "imageID") %>%
+      group_by(patient, primaryCellType, otherCellType, marker) %>%
+      summarise(imageID = first(imageID),
+                primaryCellType = first(primaryCellType),
+                otherCellType = first(otherCellType),
+                marker = first(marker),
+                tval = mean(tval),
+                coef = mean(coef),
+                pval = mean(pval),
+                fdr = mean(fdr))
+    
+    stateChanges$imageID <- NULL
+    colnames(stateChanges)[1] <- "imageID"
+
+  }
   
   t_stats <- stateChanges %>%
     group_by(primaryCellType, otherCellType, marker) %>%
@@ -132,7 +210,7 @@ getVolcano <- function(stateChanges,
               n_image = n()) %>%
     filter(n_image > imageThresh)
   
-  t_stats$fdr <- p.adjust(t_stats$pval)
+  t_stats$fdr <- p.adjust(t_stats$pval, method = "fdr")
   
   t_stats$diffexpressed <- "NO"
   t_stats$diffexpressed[t_stats$mean > thresh & t_stats$fdr < pvalThresh] <- "UP"
@@ -140,6 +218,9 @@ getVolcano <- function(stateChanges,
   
   t_stats$combined <- paste(t_stats$primaryCellType, t_stats$otherCellType, t_stats$marker, 
                             sep = "__")
+  
+
+  
   
   tmp1 <- t_stats %>%
     filter(diffexpressed == "UP")
@@ -151,6 +232,22 @@ getVolcano <- function(stateChanges,
   
   tmp <- rbind(tmp1, tmp2)
   
+  
+  if(weighted == TRUE) {
+    tmp1 <- t_stats %>%
+      filter(diffexpressed == "UP")
+    tmp1$weighted <- -log10(tmp1$fdr) * tmp1$mean
+    tmp1 <- tail(tmp1[order(tmp1$weighted), "combined"], n_labels)
+    
+    tmp2 <- t_stats %>%
+      filter(diffexpressed == "DOWN")
+    tmp2$weighted <- -log10(tmp2$fdr) * -(tmp2$mean)
+    tmp2 <- tail(tmp2[order(tmp2$weighted), "combined"], n_labels)
+    
+    tmp <- rbind(tmp1, tmp2)
+  }
+  
+  
   t_stats$delabel <- ifelse(t_stats$combined %in% tmp$combined, t_stats$combined, NA)
   
   t_stats <- t_stats[order(t_stats$fdr),]
@@ -159,12 +256,22 @@ getVolcano <- function(stateChanges,
 ```
 
 ```{r}
+patientMapping <- schurchSCE |>
+    na.omit() |>
+    colData() |> 
+    as.data.frame() |> 
+    select(imageID, patient) |>
+    unique()
+
 library(ggrepel)
+sqrtTval <- getVolcano(stateChangesSchurch, var = "tval", imageThresh = 1, n_labels = 10)
+sqrtTvalTest <- getVolcano(stateChangesSchurch, var = "tval", imageThresh = 1, n_labels = 10, subject = patientMapping, thresh = 0.01)
+sqrtTvalTest2 <- getVolcano(stateChangesSchurch, var = "tval", imageThresh = 1, n_labels = 10, subject = patientMapping, weighted = TRUE)
+sqrtTvalAbu <- getVolcano(stateChangesAbuSchurch, var = "tval", imageThresh = 1, n_labels = 10)
+# sqrtTvalCor <- getVolcano(stateChangesCorrectedSchurch, var = "tval", imageThresh = 1, n_labels = 10)
+# sqrtTvalCorAbu <- getVolcano(stateChangesCorrectedAbuSchurch, var = "tval", imageThresh = 1, n_labels = 10)
 
-sqrtTvalCor <- getVolcano(stateChangesSchurch, var = "tval", imageThresh = 1, n_labels = 10)
-sqrtcoefCor <- getVolcano(stateChangesSchurch, var = "coef", imageThresh = 1, n_labels = 5)
-
-ggplot(sqrtTvalCor, aes(x = mean, y = -log10(fdr), col = diffexpressed, label = delabel)) +
+ggplot(sqrtTval, aes(x = mean, y = -log10(fdr), col = diffexpressed, label = delabel)) +
   geom_vline(xintercept = c(-0.006, 0.006), col = "gray", linetype = 'dashed') +
   geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
   geom_point_rast() +
@@ -174,4 +281,188 @@ ggplot(sqrtTvalCor, aes(x = mean, y = -log10(fdr), col = diffexpressed, label = 
   theme(legend.position = "none") +
   labs(x = expression("Coefficient"), y = expression("-log"[10]*"(adj.p-value)"))
 
+ggplot(sqrtTvalTest, aes(x = mean, y = -log10(fdr), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.01, 0.01), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point_rast() +
+  xlim(-0.1, 0.1) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00")) +
+  geom_text_repel(max.overlaps = Inf, size = 3, min.segment.length = unit(0.1, "lines")) +
+  theme(legend.position = "none") +
+  labs(x = expression("Coefficient"), y = expression("-log"[10]*"(adj.p-value)"))
+
+(sqrtTval$fdr < 0.05) |> sum()
+(sqrtTvalTest$fdr < 0.05 & abs(sqrtTvalTest$mean) > 0.01) |> sum()
+(sqrtTvalTest2$fdr < 0.05) |> sum()
 ```
+
+```{r}
+ggplot(sqrtTvalAbu, aes(x = mean, y = -log10(fdr), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.006, 0.006), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point_rast() +
+  xlim(-1, 1) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00")) +
+  geom_text_repel(max.overlaps = Inf, size = 3, min.segment.length = unit(0.1, "lines")) +
+  theme(legend.position = "none") +
+  labs(x = expression("Coefficient"), y = expression("-log"[10]*"(adj.p-value)"))
+
+```
+
+```{r}
+ggplot(sqrtTval, aes(x = mean, y = -log10(fdr), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.006, 0.006), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point_rast() +
+  xlim(-0.1, 0.1) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00")) +
+  geom_text_repel(max.overlaps = Inf, size = 3, min.segment.length = unit(0.1, "lines")) +
+  theme(legend.position = "none") +
+  labs(x = expression("Coefficient"), y = expression("-log"[10]*"(adj.p-value)"))
+```
+
+
+```{r, include=FALSE}
+ggplot(sqrtTvalCor, aes(x = mean, y = -log10(fdr), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.006, 0.006), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point_rast() +
+  xlim(-0.1, 0.1) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00")) +
+  geom_text_repel(max.overlaps = Inf, size = 3, min.segment.length = unit(0.1, "lines")) +
+  theme(legend.position = "none") +
+  labs(x = expression("Coefficient"), y = expression("-log"[10]*"(adj.p-value)"))
+```
+
+
+EXTRAs - figuregen branch
+
+```{r, eval = FALSE}
+
+which(stateChangesSchurch$primaryCellType == "cd68_cd163_macrophages" & stateChangesSchurch$otherCellType == "vasculature" & stateChangesSchurch$marker == "cd34" & stateChangesSchurch$imageID == "reg005_A")
+
+which(stateChangesCorrectedSchurch$primaryCellType == "cd68_cd163_macrophages" & stateChangesCorrectedSchurch$otherCellType == "vasculature" & stateChangesCorrectedSchurch$marker == "cd34" & stateChangesCorrectedSchurch$imageID == "reg005_A")
+
+which(stateChangesSchurch$primaryCellType == "cd68_cd163_macrophages" & stateChangesSchurch$otherCellType == "smooth_muscle" & stateChangesSchurch$marker == "a_sma" & stateChangesSchurch$imageID == "reg007_B")
+
+which(stateChangesCorrectedSchurch$primaryCellType == "cd68_cd163_macrophages" & stateChangesCorrectedSchurch$otherCellType == "smooth_muscle" & stateChangesCorrectedSchurch$marker == "a_sma" & stateChangesCorrectedSchurch$imageID == "reg007_B")
+
+
+stateChangesSchurch |>
+  filter(primaryCellType == "cd68_cd163_macrophages" & otherCellType == "vasculature" & marker == "cd34") |> View()
+
+stateChangesSchurch |>
+  filter(primaryCellType == "cd68_cd163_macrophages" & otherCellType == "smooth_muscle" & marker == "a_sma") |> View()
+
+stateChangesCorrectedSchurch |>
+  filter(primaryCellType == "cd68_cd163_macrophages" & otherCellType == "vasculature" & marker == "cd34") |> View()
+
+stateChangesCorrectedSchurch |>
+  filter(primaryCellType == "cd68_cd163_macrophages" & otherCellType == "smooth_muscle" & marker == "a_sma") |> View()
+
+
+schurchSCE$imageID[schurchSCE$cellType == "vasculature"] |> table() |> sort()
+schurchSCE$imageID[schurchSCE$cellType == "cd68_cd163_macrophages"] |> table() |> sort()
+```
+
+
+```{r, eval = FALSE}
+plotStateChanges(schurchSCE,
+                 image = "reg005_A",
+                 from = "cd68_cd163_macrophages",
+                 to = "vasculature",
+                 marker = "cd34",
+                 type = "distances")
+
+calcStateChanges(schurchSCE,
+                 image = "reg005_A",
+                 from = "cd68_cd163_macrophages",
+                 to = "vasculature",
+                 marker = "cd34",
+                 type = "distances",
+                 contamination = TRUE)
+
+plotStateChanges(schurchSCE,
+                 image = "reg007_B",
+                 from = "cd68_cd163_macrophages",
+                 to = "smooth_muscle",
+                 marker = "a_sma",
+                 type = "distances")
+
+calcStateChanges(schurchSCE,
+                 image = "reg005_A",
+                 from = "cd68_cd163_macrophages",
+                 to = "vasculature",
+                 marker = "cd34",
+                 type = "distances",
+                 contamination = TRUE)
+```
+
+
+```{r, eval = FALSE}
+plotStateChanges(schurchSCE,
+                 image = "reg005_A",
+                 from = "cd68_cd163_macrophages",
+                 to = "vasculature",
+                 marker = "cd34",
+                 type = "distances")
+```
+
+
+```{r, eval = FALSE}
+plotStateChanges(schurchSCE,
+                 image = "reg005_A",
+                 from = "cd68_cd163_macrophages",
+                 to = "vasculature",
+                 marker = "cd34",
+                 type = "distances")
+
+plotStateChanges(schurchSCE,
+                 image = "reg007_B",
+                 from = "cd68_cd163_macrophages",
+                 to = "smooth_muscle",
+                 marker = "a_sma",
+                 type = "distances")
+```
+
+
+
+```{r, eval = FALSE}
+plotStateChanges(schurchSCE,
+                 image = "reg057_A",
+                 from = "tumor_cells",
+                 to = "cd68_cd163_macrophages",
+                 marker = "na_k_at_pase",
+                 type = "distances")
+
+calcStateChanges(schurchSCE,
+                 image = "reg057_A",
+                 from = "tumor_cells",
+                 to = "cd68_cd163_macrophages",
+                 marker = "na_k_at_pase",
+                 type = "distances",
+                 minCells = 0)
+
+# stateChanges <- calcStateChanges(schurchSCE,
+#                  type = "distances",
+#                  minCells = 0)
+
+```
+
+
+```{r, eval = FALSE}
+plotStateChanges(tmp,
+                 image = "reg005_B",
+                 from = "cd68_cd163_macrophages",
+                 to = "plasma_cells",
+                 marker = "cd194",
+                 type = "distances"
+                 )
+```
+
+
+
+
+
+
+
