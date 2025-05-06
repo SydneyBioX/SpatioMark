@@ -188,11 +188,11 @@ names(schurchSurv2) = survData2$imageID
 
 ```
 
-## For you to remember later: Figures 4A and 4B in the original SpatioMark manuscript is only reproducible when you set minCells = 0 for `calcStateChanges`. The default setting of minCells is minCells = 20. Otherwise the CD5 expression in CD8 T cells near Tumours does not come through for the survival plots.
+## Figures 4A and 4B in the original SpatioMark manuscript is reproduced when you set minCells = 0 for `calcStateChanges`. The default setting of minCells is minCells = 20. Otherwise the CD5 expression in CD8 T cells near Tumours does not come through for the survival plots.
 
-If we do minCells = 100 - we have 33 significant relationships by FDR, but CD5 in CD8 T cells drops out, which is not a big deal. 
+If we do minCells = 100 - we have 33 significant relationships by FDR, but CD5 in CD8 T cells drops out. 
 
-Will want to cross-check with Ellis what he thinks is the best way forward. I would just go for the minCells = 100 with the 33 relationships and change both the volcano plot and the survival plots. 
+Set minCells = 100 gives us 33 relationships and change both the volcano plot and the survival plots. 
 
 # Figure 4A (figuregen branch of Statial)
 
