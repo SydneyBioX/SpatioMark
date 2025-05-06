@@ -25,13 +25,14 @@ library(Statial)
 library(dplyr)
 library(ggplot2)
 library(SingleCellExperiment)
+library(SpatialDatasets)
 ```
 
 
 # Preprocessing - Sqrt Transform
 
 ```{r normalize-matrix-sqrt}
-spe_Schurch_2020 <- readRDS("spe_Schurch_2020.rds")
+spe_Schurch_2020 <- SpatialDatasets::spe_Schurch_2020()
 
 sqrtSCE <- spe_Schurch_2020
 
@@ -187,9 +188,9 @@ names(schurchSurv2) = survData2$imageID
 
 ```
 
-## For you to remember later: Figures 4A and 4B in the original SpatioMark manuscript is only reproducible when you set minCells = 0 for `calcStateChanges`. The default setting of minCells is minCells = 20. Otherwise the CD5 expression in CD8 T cells near Tumours does not come through for the survival plots, funnily enough.
+## For you to remember later: Figures 4A and 4B in the original SpatioMark manuscript is only reproducible when you set minCells = 0 for `calcStateChanges`. The default setting of minCells is minCells = 20. Otherwise the CD5 expression in CD8 T cells near Tumours does not come through for the survival plots.
 
-If we do minCells = 100 - we have 33 significant relationships by FDR, but CD5 in CD8 T cells drops out, which is not a big deal I suppose. 
+If we do minCells = 100 - we have 33 significant relationships by FDR, but CD5 in CD8 T cells drops out, which is not a big deal. 
 
 Will want to cross-check with Ellis what he thinks is the best way forward. I would just go for the minCells = 100 with the 33 relationships and change both the volcano plot and the survival plots. 
 
